@@ -10,9 +10,10 @@ import '../providers/auth_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
 import '../utils/color_utils.dart';
+import '../widgets/sync_indicator.dart';
 import 'lock_screen.dart';
 import 'note_editor_screen.dart';
-import 'sync_settings_screen.dart';
+import 'settings_screen.dart';
 
 class NotesListScreen extends StatelessWidget {
   const NotesListScreen({super.key});
@@ -85,78 +86,26 @@ class NotesListScreen extends StatelessWidget {
     );
   }
 
-  void _toggleBiometric(BuildContext context) async {
-    final auth = context.read<AuthProvider>();
-    if (auth.biometricEnabled) {
-      await auth.disableBiometric();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Biometric unlock disabled')),
-        );
-      }
-    } else {
-      await auth.enableBiometric();
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Biometric unlock enabled')),
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('SecretNotes'),
         actions: [
-          Consumer<SyncProvider>(
-            builder: (context, sync, _) {
-              return IconButton(
-                icon: Icon(
-                  switch (sync.status) {
-                    SyncStatus.syncing => Icons.sync,
-                    SyncStatus.error => Icons.cloud_off_outlined,
-                    SyncStatus.idle =>
-                      sync.configured ? Icons.cloud_done_outlined : Icons.cloud_outlined,
-                  },
-                  color: sync.status == SyncStatus.error
-                      ? Colors.redAccent
-                      : (sync.configured ? Colors.teal : null),
-                ),
-                tooltip: 'Sync',
-                onPressed: () {
-                  if (sync.configured) sync.sync();
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const SyncSettingsScreen(),
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-          Consumer<AuthProvider>(
-            builder: (context, auth, _) {
-              if (!auth.biometricAvailable) return const SizedBox.shrink();
-              return IconButton(
-                icon: Icon(
-                  auth.biometricEnabled
-                      ? Icons.fingerprint
-                      : Icons.fingerprint_outlined,
-                  color: auth.biometricEnabled ? Colors.teal : null,
-                ),
-                tooltip: auth.biometricEnabled
-                    ? 'Disable biometric'
-                    : 'Enable biometric',
-                onPressed: () => _toggleBiometric(context),
-              );
-            },
-          ),
+          // Always-visible live/offline indicator; tap to sync now (or set up
+          // sync when not configured). Full configuration lives in Settings.
+          const SyncCloudIndicator(),
           IconButton(
             icon: const Icon(Icons.lock_outline),
             tooltip: 'Lock',
             onPressed: () => _lock(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
           ),
         ],
       ),
