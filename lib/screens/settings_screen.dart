@@ -99,6 +99,7 @@ class SettingsScreen extends StatelessWidget {
             title: const Text('Lock now'),
             onTap: () => _lock(context),
           ),
+          const _LegacyBackupSection(),
           const Divider(),
           _sectionHeader(context, 'About'),
           ListTile(
@@ -129,6 +130,97 @@ class SettingsScreen extends StatelessWidget {
               letterSpacing: 1.1,
             ),
       ),
+    );
+  }
+}
+
+/// Shown only while a pre-sync backup box still exists on disk: lets the user
+/// delete it once they've confirmed their notes migrated correctly.
+class _LegacyBackupSection extends StatefulWidget {
+  const _LegacyBackupSection();
+
+  @override
+  State<_LegacyBackupSection> createState() => _LegacyBackupSectionState();
+}
+
+class _LegacyBackupSectionState extends State<_LegacyBackupSection> {
+  bool? _hasBackup;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final has = await context.read<AuthProvider>().hasLegacyBackup();
+    if (mounted) setState(() => _hasBackup = has);
+  }
+
+  Future<void> _remove() async {
+    final auth = context.read<AuthProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove pre-sync backup?'),
+        content: const Text(
+          'This permanently deletes the original pre-sync copy of your notes '
+          'that was kept as a safety net. Only do this once you have confirmed '
+          'all your notes are present. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await auth.removeLegacyBackup();
+      if (mounted) setState(() => _hasBackup = false);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Pre-sync backup removed')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasBackup != true) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Divider(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+          child: Text(
+            'STORAGE',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Colors.teal,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.1,
+                ),
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.cleaning_services_outlined),
+          title: const Text('Remove pre-sync backup'),
+          subtitle: const Text(
+            'Your notes were migrated to the encrypted vault. A backup of the '
+            'originals is kept until you remove it here.',
+          ),
+          trailing: TextButton(
+            onPressed: _remove,
+            child: const Text('Remove'),
+          ),
+        ),
+      ],
     );
   }
 }

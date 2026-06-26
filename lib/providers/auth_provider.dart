@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import '../services/storage_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -128,6 +129,16 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> finalizeMigration() => _authService.finalizeMigration();
+
+  /// Whether a pre-sync backup box is still present on disk.
+  Future<bool> hasLegacyBackup() => StorageService.hasLegacyVault();
+
+  /// Permanently remove the pre-sync backup and its verifier.
+  Future<void> removeLegacyBackup() async {
+    await StorageService.deleteLegacyBackup();
+    await _authService.clearLegacyVerifier();
+    notifyListeners();
+  }
 
   Future<void> enableBiometric() async {
     if (_dek == null || _authKey == null) return;

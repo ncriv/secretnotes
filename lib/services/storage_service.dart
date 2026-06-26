@@ -7,6 +7,16 @@ import '../models/note_codec.dart';
 import '../models/note_record.dart';
 import 'crypto_service.dart';
 
+/// Thrown when the legacy migration cannot verify that every note copied
+/// across intact. The original `notes` box is never deleted, so the user's
+/// data is safe to retry.
+class MigrationException implements Exception {
+  final String message;
+  MigrationException(this.message);
+  @override
+  String toString() => 'MigrationException: $message';
+}
+
 /// Local vault. Notes are stored as [NoteRecord]s whose `blob` is the
 /// per-note AES-256-GCM ciphertext. The Hive box itself is additionally
 /// encrypted with the DEK for defense-in-depth at rest, so even the sync
@@ -191,8 +201,17 @@ class StorageService {
 
   /// One-time migration of the pre-sync, box-level-encrypted `notes` box into
   /// per-note records. Returns the number of notes imported (0 if there was
-  /// nothing to migrate). The imported records are marked dirty so they upload
-  /// on the first sync.
+  /// nothing to migrate). Imported records are marked dirty so they upload on
+  /// the first sync.
+  ///
+  /// Safety contract — this never destroys the only copy of your notes:
+  ///   1. every note is copied into the vault, then
+  ///   2. every note is read back and decrypted to confirm it round-trips
+  ///      identically, and only if that fully succeeds does the migration
+  ///      report success. On any mismatch it throws [MigrationException].
+  /// The original `notes` box is **kept on disk as a backup** either way (the
+  /// caller records completion via a flag; see [deleteLegacyBackup] to remove
+  /// the backup once you're confident).
   Future<int> migrateLegacyVault(Uint8List oldKey, Uint8List dek) async {
     if (!await Hive.boxExists(_legacyBox)) return 0;
 
@@ -200,25 +219,63 @@ class StorageService {
       _legacyBox,
       encryptionCipher: HiveAesCipher(oldKey),
     );
-    var imported = 0;
-    for (final note in legacy.values) {
-      final blob = CryptoService.encryptPayload(dek, NoteCodec.encode(note));
-      await _vault.put(
-        note.id,
-        NoteRecord(
-          id: note.id,
-          blob: blob,
-          rev: 0,
-          dirty: true,
-          deleted: false,
-          updatedAt: note.updatedAt,
-        ),
-      );
-      imported++;
+    try {
+      final originals = legacy.values.toList();
+
+      // 1. Copy (idempotent by id, so a re-run after an interruption is safe).
+      for (final note in originals) {
+        final blob = CryptoService.encryptPayload(dek, NoteCodec.encode(note));
+        await _vault.put(
+          note.id,
+          NoteRecord(
+            id: note.id,
+            blob: blob,
+            rev: 0,
+            dirty: true,
+            deleted: false,
+            updatedAt: note.updatedAt,
+          ),
+        );
+      }
+
+      // 2. Verify every original survived the round-trip before we trust it.
+      for (final note in originals) {
+        final record = _vault.get(note.id);
+        if (record == null) {
+          throw MigrationException(
+            'note "${note.id}" missing from the vault after copy',
+          );
+        }
+        final restored = _decode(record);
+        if (restored == null || !_sameNote(note, restored)) {
+          throw MigrationException(
+            'note "${note.id}" did not round-trip; original left untouched',
+          );
+        }
+      }
+
+      return originals.length;
+    } finally {
+      // Keep the box file on disk as a backup; just release the handle.
+      await legacy.close();
     }
-    await legacy.deleteFromDisk();
-    return imported;
   }
 
+  static bool _sameNote(Note a, Note b) =>
+      a.id == b.id &&
+      a.title == b.title &&
+      a.contentJson == b.contentJson &&
+      a.colorIndex == b.colorIndex &&
+      a.createdAt.millisecondsSinceEpoch == b.createdAt.millisecondsSinceEpoch &&
+      a.updatedAt.millisecondsSinceEpoch == b.updatedAt.millisecondsSinceEpoch;
+
   static Future<bool> hasLegacyVault() => Hive.boxExists(_legacyBox);
+
+  /// Permanently delete the pre-sync backup box. Call only after the user
+  /// confirms their notes migrated correctly.
+  static Future<void> deleteLegacyBackup() async {
+    if (await Hive.boxExists(_legacyBox)) {
+      await Hive.deleteBoxFromDisk(_legacyBox);
+    }
+  }
 }

@@ -60,12 +60,49 @@ class _LockScreenState extends State<LockScreen> {
 
     await notesProvider.init(dek);
 
-    // One-time migration of a pre-sync vault, if present.
+    // One-time migration of a pre-sync vault, if present. This is the only
+    // potentially destructive step, so it is verify-then-keep: the original
+    // box is preserved as a backup and we only mark the migration done after
+    // every note has been confirmed to round-trip.
     final legacyKey = auth.consumeLegacyKey();
     if (legacyKey != null && await StorageService.hasLegacyVault()) {
-      await StorageService.instance.migrateLegacyVault(legacyKey, dek);
-      await auth.finalizeMigration();
-      notesProvider.reload();
+      try {
+        final count =
+            await StorageService.instance.migrateLegacyVault(legacyKey, dek);
+        await auth.finalizeMigration();
+        notesProvider.reload();
+        if (mounted && count > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Imported $count note${count == 1 ? '' : 's'} into the '
+                'encrypted vault (a backup of the originals is kept).',
+              ),
+            ),
+          );
+        }
+      } catch (e) {
+        // Not finalized → migration retries on next unlock. Originals are safe.
+        if (mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Migration not completed'),
+              content: const Text(
+                'Your existing notes could not be fully verified during '
+                'upgrade, so nothing was changed or deleted — your original '
+                'notes are safe. The app will try again next time you unlock.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
     }
 
     // Bind the session to sync and kick off a background sync if configured.

@@ -34,9 +34,14 @@ class AuthService {
   static const _kBioDek = 'bio_dek';
   static const _kBioAuth = 'bio_auth';
 
-  // Legacy (pre-sync) verifier — present only until migration is finalized.
+  // Legacy (pre-sync) verifier. Kept (along with the backup box) even after
+  // migration, so the backup stays decryptable until the user removes it.
   static const _kLegacySalt = 'salt';
   static const _kLegacyHash = 'key_hash';
+
+  // Set once the legacy vault has been migrated and verified. Gates re-running
+  // migration without relying on the backup box being deleted.
+  static const _kMigrationDone = 'migration_done';
 
   Future<bool> hasAccount() async =>
       (await _secureStorage.read(key: _kKdfSalt)) != null;
@@ -96,8 +101,11 @@ class AuthService {
       authKey = upgraded.authKey;
     }
 
-    // Hand the old key back if a legacy vault still needs note migration.
-    final legacyKey = await _deriveLegacy(password);
+    // Hand the old key back only if a legacy vault still needs migrating.
+    // Once migration is done we skip this entirely (no re-migration, and no
+    // unnecessary legacy key derivation).
+    final legacyKey =
+        await isMigrationDone() ? null : await _deriveLegacy(password);
     return UnlockResult(dek: dek, authKey: authKey, legacyKey: legacyKey);
   }
 
@@ -164,8 +172,18 @@ class AuthService {
     await _secureStorage.write(key: _kWrappedDek, value: wrappedDekB64);
   }
 
-  /// Clear the legacy verifier once its notes have been imported.
+  Future<bool> isMigrationDone() async =>
+      (await _secureStorage.read(key: _kMigrationDone)) == 'true';
+
+  /// Record that the legacy vault migrated and verified successfully. The
+  /// backup box and its verifier are kept until the user removes them.
   Future<void> finalizeMigration() async {
+    await _secureStorage.write(key: _kMigrationDone, value: 'true');
+  }
+
+  /// Remove the legacy verifier — call when deleting the pre-sync backup, since
+  /// the old box is no longer needed.
+  Future<void> clearLegacyVerifier() async {
     await _secureStorage.delete(key: _kLegacySalt);
     await _secureStorage.delete(key: _kLegacyHash);
   }
