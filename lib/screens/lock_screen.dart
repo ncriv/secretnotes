@@ -22,19 +22,22 @@ class _LockScreenState extends State<LockScreen> {
   bool _obscureConfirm = true;
   bool _biometricAutoTried = false;
 
+  // Captured in initState so dispose never touches `context` during unmount.
+  late final AuthProvider _auth;
+
   @override
   void initState() {
     super.initState();
-    final auth = context.read<AuthProvider>();
-    auth.addListener(_maybeAutoBiometric);
+    _auth = context.read<AuthProvider>();
+    _auth.addListener(_maybeAutoBiometric);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeAutoBiometric();
     });
   }
 
   void _maybeAutoBiometric() {
-    if (_biometricAutoTried) return;
-    final auth = context.read<AuthProvider>();
+    if (!mounted || _biometricAutoTried) return;
+    final auth = _auth;
     if (auth.isFirstLaunch) return;
     if (auth.biometricAvailable && auth.biometricEnabled) {
       _biometricAutoTried = true;
@@ -159,7 +162,7 @@ class _LockScreenState extends State<LockScreen> {
 
   @override
   void dispose() {
-    context.read<AuthProvider>().removeListener(_maybeAutoBiometric);
+    _auth.removeListener(_maybeAutoBiometric);
     _passwordController.dispose();
     _confirmController.dispose();
     super.dispose();
