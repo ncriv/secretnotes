@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/notes_provider.dart';
+import '../providers/sync_provider.dart';
+import '../services/storage_service.dart';
+import 'link_device_screen.dart';
 import 'notes_list_screen.dart';
 
 class LockScreen extends StatefulWidget {
@@ -50,13 +53,39 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   Future<void> _openNotes(AuthProvider auth) async {
-    if (auth.encryptionKey == null) return;
+    final dek = auth.dek;
+    if (dek == null) return;
     final notesProvider = context.read<NotesProvider>();
-    await notesProvider.init(auth.encryptionKey!);
+    final sync = context.read<SyncProvider>();
+
+    await notesProvider.init(dek);
+
+    // One-time migration of a pre-sync vault, if present.
+    final legacyKey = auth.consumeLegacyKey();
+    if (legacyKey != null && await StorageService.hasLegacyVault()) {
+      await StorageService.instance.migrateLegacyVault(legacyKey, dek);
+      await auth.finalizeMigration();
+      notesProvider.reload();
+    }
+
+    // Bind the session to sync and kick off a background sync if configured.
+    sync.onVaultChanged = notesProvider.reload;
+    if (auth.authKey != null) sync.attach(auth.authKey!);
+    if (sync.configured) sync.sync();
+
     if (mounted) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const NotesListScreen()),
       );
+    }
+  }
+
+  Future<void> _linkDevice() async {
+    final linked = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const LinkDeviceScreen()),
+    );
+    if (linked == true && mounted) {
+      await _openNotes(context.read<AuthProvider>());
     }
   }
 
@@ -203,6 +232,14 @@ class _LockScreenState extends State<LockScreen> {
                       onPressed: auth.isLoading ? null : _tryBiometric,
                       icon: const Icon(Icons.fingerprint, size: 48),
                       color: Colors.teal,
+                    ),
+                  ],
+                  if (auth.isFirstLaunch) ...[
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: auth.isLoading ? null : _linkDevice,
+                      icon: const Icon(Icons.cloud_sync, size: 18),
+                      label: const Text('Link an existing account'),
                     ),
                   ],
                 ],

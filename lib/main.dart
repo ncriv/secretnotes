@@ -5,8 +5,10 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
 
 import 'models/note.dart';
+import 'models/note_record.dart';
 import 'providers/auth_provider.dart';
 import 'providers/notes_provider.dart';
+import 'providers/sync_provider.dart';
 import 'screens/lock_screen.dart';
 import 'theme/app_theme.dart';
 
@@ -14,12 +16,14 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   Hive.registerAdapter(NoteAdapter());
+  Hive.registerAdapter(NoteRecordAdapter());
 
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
         ChangeNotifierProvider(create: (_) => NotesProvider()),
+        ChangeNotifierProvider(create: (_) => SyncProvider()..load()),
       ],
       child: const SecretNotesApp(),
     ),
@@ -55,6 +59,7 @@ class _SecretNotesAppState extends State<SecretNotesApp>
       final auth = context.read<AuthProvider>();
       if (auth.isUnlocked) {
         context.read<NotesProvider>().close();
+        context.read<SyncProvider>().detach();
         auth.lock();
         navigatorKey.currentState?.pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => const LockScreen()),

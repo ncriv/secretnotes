@@ -8,9 +8,11 @@ import 'package:provider/provider.dart';
 import '../models/note.dart';
 import '../providers/auth_provider.dart';
 import '../providers/notes_provider.dart';
+import '../providers/sync_provider.dart';
 import '../utils/color_utils.dart';
 import 'lock_screen.dart';
 import 'note_editor_screen.dart';
+import 'sync_settings_screen.dart';
 
 class NotesListScreen extends StatelessWidget {
   const NotesListScreen({super.key});
@@ -74,6 +76,7 @@ class NotesListScreen extends StatelessWidget {
   void _lock(BuildContext context) {
     final auth = context.read<AuthProvider>();
     final notes = context.read<NotesProvider>();
+    context.read<SyncProvider>().detach();
     notes.close();
     auth.lock();
     Navigator.of(context).pushAndRemoveUntil(
@@ -107,6 +110,32 @@ class NotesListScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('SecretNotes'),
         actions: [
+          Consumer<SyncProvider>(
+            builder: (context, sync, _) {
+              return IconButton(
+                icon: Icon(
+                  switch (sync.status) {
+                    SyncStatus.syncing => Icons.sync,
+                    SyncStatus.error => Icons.cloud_off_outlined,
+                    SyncStatus.idle =>
+                      sync.configured ? Icons.cloud_done_outlined : Icons.cloud_outlined,
+                  },
+                  color: sync.status == SyncStatus.error
+                      ? Colors.redAccent
+                      : (sync.configured ? Colors.teal : null),
+                ),
+                tooltip: 'Sync',
+                onPressed: () {
+                  if (sync.configured) sync.sync();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const SyncSettingsScreen(),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
           Consumer<AuthProvider>(
             builder: (context, auth, _) {
               if (!auth.biometricAvailable) return const SizedBox.shrink();

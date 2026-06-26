@@ -6,49 +6,184 @@ import 'package:local_auth/local_auth.dart';
 
 import 'crypto_service.dart';
 
+/// The secrets recovered by a successful unlock.
+///
+/// [dek] decrypts notes. [authKey] authenticates to the sync server.
+/// [legacyKey] is non-null only while a pre-sync vault still needs migrating;
+/// the caller uses it to import the old notes, then calls
+/// [AuthService.finalizeMigration].
+class UnlockResult {
+  final Uint8List dek;
+  final Uint8List authKey;
+  final Uint8List? legacyKey;
+
+  UnlockResult({required this.dek, required this.authKey, this.legacyKey});
+}
+
 class AuthService {
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
   final LocalAuthentication _localAuth = LocalAuthentication();
 
-  static const _keySalt = 'salt';
-  static const _keyHash = 'key_hash';
-  static const _keyBioEnabled = 'biometric_enabled';
-  static const _keyBioKey = 'bio_key';
+  // New envelope-model keys.
+  static const _kKdfSalt = 'kdf_salt';
+  static const _kKdfParams = 'kdf_params';
+  static const _kWrappedDek = 'wrapped_dek';
 
-  /// Check if this is the first launch (no password set yet).
-  Future<bool> isFirstLaunch() async {
-    final salt = await _secureStorage.read(key: _keySalt);
-    return salt == null;
+  // Biometric unlock material.
+  static const _kBioEnabled = 'biometric_enabled';
+  static const _kBioDek = 'bio_dek';
+  static const _kBioAuth = 'bio_auth';
+
+  // Legacy (pre-sync) verifier — present only until migration is finalized.
+  static const _kLegacySalt = 'salt';
+  static const _kLegacyHash = 'key_hash';
+
+  Future<bool> hasAccount() async =>
+      (await _secureStorage.read(key: _kKdfSalt)) != null;
+
+  Future<bool> hasLegacyAccount() async =>
+      (await _secureStorage.read(key: _kLegacySalt)) != null;
+
+  Future<bool> isFirstLaunch() async =>
+      !(await hasAccount()) && !(await hasLegacyAccount());
+
+  Map<String, int> get _defaultKdfParams => {
+        'm': CryptoService.kdfMemoryKib,
+        't': CryptoService.kdfIterations,
+        'p': CryptoService.kdfLanes,
+      };
+
+  /// First-launch setup: generate a fresh DEK and password-wrapped envelope.
+  Future<UnlockResult> setupPassword(String password) async {
+    final salt = CryptoService.generateSalt();
+    final params = _defaultKdfParams;
+    final masterKey = CryptoService.deriveMasterKey(
+      password,
+      salt,
+      memoryKib: params['m']!,
+      iterations: params['t']!,
+      lanes: params['p']!,
+    );
+    final dek = CryptoService.generateDek();
+    final wrapped = CryptoService.wrapDek(CryptoService.wrapKey(masterKey), dek);
+
+    await _persistEnvelope(salt, params, wrapped);
+
+    return UnlockResult(dek: dek, authKey: CryptoService.authKey(masterKey));
   }
 
-  /// Set up the master password on first launch.
-  /// Returns the derived encryption key.
-  Future<Uint8List> setupPassword(String password) async {
-    final salt = CryptoService.generateSalt();
-    final key = CryptoService.deriveKey(password, salt);
-    final hash = CryptoService.hashKey(key);
+  /// Verify the password and recover the secrets, transparently upgrading a
+  /// legacy vault to the envelope model on the way through. Returns null on a
+  /// wrong password.
+  Future<UnlockResult?> login(String password) async {
+    final hasNew = await hasAccount();
 
-    await _secureStorage.write(key: _keySalt, value: base64Encode(salt));
-    await _secureStorage.write(key: _keyHash, value: hash);
+    Uint8List dek;
+    Uint8List authKey;
 
+    if (hasNew) {
+      final unlocked = await _unlockNew(password);
+      if (unlocked == null) return null;
+      dek = unlocked.dek;
+      authKey = unlocked.authKey;
+    } else {
+      // Legacy-only account: verify the old key, then build + persist a new
+      // envelope so future logins use Argon2id.
+      final legacy = await _deriveLegacy(password);
+      if (legacy == null) return null;
+      final upgraded = await setupPassword(password);
+      dek = upgraded.dek;
+      authKey = upgraded.authKey;
+    }
+
+    // Hand the old key back if a legacy vault still needs note migration.
+    final legacyKey = await _deriveLegacy(password);
+    return UnlockResult(dek: dek, authKey: authKey, legacyKey: legacyKey);
+  }
+
+  Future<UnlockResult?> _unlockNew(String password) async {
+    final saltB64 = await _secureStorage.read(key: _kKdfSalt);
+    final paramsJson = await _secureStorage.read(key: _kKdfParams);
+    final wrappedB64 = await _secureStorage.read(key: _kWrappedDek);
+    if (saltB64 == null || paramsJson == null || wrappedB64 == null) {
+      return null;
+    }
+    final params = (jsonDecode(paramsJson) as Map).cast<String, dynamic>();
+    final masterKey = CryptoService.deriveMasterKey(
+      password,
+      base64Decode(saltB64),
+      memoryKib: params['m'] as int,
+      iterations: params['t'] as int,
+      lanes: params['p'] as int,
+    );
+    try {
+      final dek = CryptoService.unwrapDek(
+        CryptoService.wrapKey(masterKey),
+        base64Decode(wrappedB64),
+      );
+      return UnlockResult(dek: dek, authKey: CryptoService.authKey(masterKey));
+    } catch (_) {
+      // GCM authentication failure == wrong password.
+      return null;
+    }
+  }
+
+  /// Returns the legacy PBKDF2 key if a legacy verifier exists and the password
+  /// matches it; otherwise null.
+  Future<Uint8List?> _deriveLegacy(String password) async {
+    final saltB64 = await _secureStorage.read(key: _kLegacySalt);
+    final storedHash = await _secureStorage.read(key: _kLegacyHash);
+    if (saltB64 == null || storedHash == null) return null;
+    final key = CryptoService.legacyDeriveKey(password, base64Decode(saltB64));
+    if (CryptoService.legacyHashKey(key) != storedHash) return null;
     return key;
   }
 
-  /// Verify the master password and return the derived key, or null on failure.
-  Future<Uint8List?> login(String password) async {
-    final saltB64 = await _secureStorage.read(key: _keySalt);
-    final storedHash = await _secureStorage.read(key: _keyHash);
-    if (saltB64 == null || storedHash == null) return null;
-
-    final salt = base64Decode(saltB64);
-    final key = CryptoService.deriveKey(password, Uint8List.fromList(salt));
-    final hash = CryptoService.hashKey(key);
-
-    if (hash == storedHash) return key;
-    return null;
+  Future<void> _persistEnvelope(
+    Uint8List salt,
+    Map<String, int> params,
+    Uint8List wrappedDek,
+  ) async {
+    await _secureStorage.write(key: _kKdfSalt, value: base64Encode(salt));
+    await _secureStorage.write(key: _kKdfParams, value: jsonEncode(params));
+    await _secureStorage.write(
+      key: _kWrappedDek,
+      value: base64Encode(wrappedDek),
+    );
   }
 
-  /// Check if the device supports biometric authentication.
+  /// Install an envelope received from the server when linking a new device to
+  /// an existing account, so the device can also unlock offline.
+  Future<void> installEnvelope({
+    required String saltB64,
+    required String paramsJson,
+    required String wrappedDekB64,
+  }) async {
+    await _secureStorage.write(key: _kKdfSalt, value: saltB64);
+    await _secureStorage.write(key: _kKdfParams, value: paramsJson);
+    await _secureStorage.write(key: _kWrappedDek, value: wrappedDekB64);
+  }
+
+  /// Clear the legacy verifier once its notes have been imported.
+  Future<void> finalizeMigration() async {
+    await _secureStorage.delete(key: _kLegacySalt);
+    await _secureStorage.delete(key: _kLegacyHash);
+  }
+
+  /// Material needed to bootstrap a sync account on the server.
+  Future<({String saltB64, String paramsJson, String wrappedDekB64})?>
+      envelope() async {
+    final saltB64 = await _secureStorage.read(key: _kKdfSalt);
+    final paramsJson = await _secureStorage.read(key: _kKdfParams);
+    final wrappedB64 = await _secureStorage.read(key: _kWrappedDek);
+    if (saltB64 == null || paramsJson == null || wrappedB64 == null) {
+      return null;
+    }
+    return (saltB64: saltB64, paramsJson: paramsJson, wrappedDekB64: wrappedB64);
+  }
+
+  // --- Biometric unlock -----------------------------------------------------
+
   Future<bool> isBiometricAvailable() async {
     try {
       final canCheck = await _localAuth.canCheckBiometrics;
@@ -59,26 +194,22 @@ class AuthService {
     }
   }
 
-  /// Check if the user has enabled biometric unlock.
-  Future<bool> isBiometricEnabled() async {
-    final val = await _secureStorage.read(key: _keyBioEnabled);
-    return val == 'true';
+  Future<bool> isBiometricEnabled() async =>
+      (await _secureStorage.read(key: _kBioEnabled)) == 'true';
+
+  Future<void> enableBiometric(Uint8List dek, Uint8List authKey) async {
+    await _secureStorage.write(key: _kBioDek, value: base64Encode(dek));
+    await _secureStorage.write(key: _kBioAuth, value: base64Encode(authKey));
+    await _secureStorage.write(key: _kBioEnabled, value: 'true');
   }
 
-  /// Enable biometric unlock by storing the encryption key.
-  Future<void> enableBiometric(Uint8List key) async {
-    await _secureStorage.write(key: _keyBioKey, value: base64Encode(key));
-    await _secureStorage.write(key: _keyBioEnabled, value: 'true');
-  }
-
-  /// Disable biometric unlock.
   Future<void> disableBiometric() async {
-    await _secureStorage.delete(key: _keyBioKey);
-    await _secureStorage.write(key: _keyBioEnabled, value: 'false');
+    await _secureStorage.delete(key: _kBioDek);
+    await _secureStorage.delete(key: _kBioAuth);
+    await _secureStorage.write(key: _kBioEnabled, value: 'false');
   }
 
-  /// Authenticate with biometrics and return the stored key, or null on failure.
-  Future<Uint8List?> biometricLogin() async {
+  Future<UnlockResult?> biometricLogin() async {
     try {
       final authenticated = await _localAuth.authenticate(
         localizedReason: 'Unlock SecretNotes',
@@ -89,10 +220,14 @@ class AuthService {
       );
       if (!authenticated) return null;
 
-      final keyB64 = await _secureStorage.read(key: _keyBioKey);
-      if (keyB64 == null) return null;
+      final dekB64 = await _secureStorage.read(key: _kBioDek);
+      final authB64 = await _secureStorage.read(key: _kBioAuth);
+      if (dekB64 == null || authB64 == null) return null;
 
-      return Uint8List.fromList(base64Decode(keyB64));
+      return UnlockResult(
+        dek: base64Decode(dekB64),
+        authKey: base64Decode(authB64),
+      );
     } catch (_) {
       return null;
     }
