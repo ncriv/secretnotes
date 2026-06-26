@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/notes_provider.dart';
 import '../providers/sync_provider.dart';
+import 'backup_screen.dart';
 import 'lock_screen.dart';
 import 'sync_settings_screen.dart';
 
@@ -98,6 +99,17 @@ class SettingsScreen extends StatelessWidget {
             leading: const Icon(Icons.lock_outline),
             title: const Text('Lock now'),
             onTap: () => _lock(context),
+          ),
+          const Divider(),
+          _sectionHeader(context, 'Data'),
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('Backup & restore'),
+            subtitle: const Text('Export notes to a file, or import a backup'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const BackupScreen()),
+            ),
           ),
           const _LegacyBackupSection(),
           const Divider(),

@@ -130,6 +130,10 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> finalizeMigration() => _authService.finalizeMigration();
 
+  /// Envelope (KDF salt/params + wrapped DEK) for building an encrypted backup.
+  Future<({String saltB64, String paramsJson, String wrappedDekB64})?>
+      envelope() => _authService.envelope();
+
   /// Whether a pre-sync backup box is still present on disk.
   Future<bool> hasLegacyBackup() => StorageService.hasLegacyVault();
 

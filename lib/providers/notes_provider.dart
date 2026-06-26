@@ -73,6 +73,17 @@ class NotesProvider extends ChangeNotifier {
 
   Note? getNote(String id) => _storage.getNote(id);
 
+  /// Merge restored notes into the vault (by id), marking them dirty so they
+  /// sync. Returns the number imported.
+  Future<int> importNotes(List<Note> imported) async {
+    for (final note in imported) {
+      await _storage.upsertNote(note);
+    }
+    _loadNotes();
+    notifyListeners();
+    return imported.length;
+  }
+
   Future<void> close() async {
     await _storage.close();
     _notes = [];
