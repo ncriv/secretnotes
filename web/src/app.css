@@ -1,0 +1,197 @@
+/* SecretNotes web — design tokens & base. See DESIGN-NOTES.md. */
+
+:root {
+  /* Warm paper & ink-violet */
+  --paper: #f6f4ef;
+  --sheet: #ffffff;
+  --sheet-2: #fbfaf7;
+  --ink: #201e1b;
+  --ink-soft: #6e675c;
+  --ink-faint: #a49c8f;
+  --line: #e7e2d8;
+  --line-strong: #d9d2c5;
+
+  --accent: #5a4fe4;
+  --accent-hover: #4a3fd0;
+  --accent-tint: #eceafb;
+  --accent-ink: #4034b8;
+
+  --danger: #c9483b;
+  --good: #3f9a6d;
+
+  --shadow-sm: 0 1px 2px rgba(40, 34, 20, 0.05);
+  --shadow-md: 0 6px 20px -8px rgba(40, 34, 20, 0.18);
+  --shadow-lg: 0 24px 60px -20px rgba(40, 34, 20, 0.32);
+
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 22px;
+
+  --font-display: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+  --font-body: 'Hanken Grotesk Variable', system-ui, sans-serif;
+
+  --maxw: 1120px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #16151a;
+    --sheet: #201f26;
+    --sheet-2: #26242d;
+    --ink: #edeae3;
+    --ink-soft: #a49d92;
+    --ink-faint: #6f6a62;
+    --line: #322f3a;
+    --line-strong: #3d3947;
+
+    --accent: #8b82f5;
+    --accent-hover: #a49cff;
+    --accent-tint: #262340;
+    --accent-ink: #b7b0ff;
+
+    --danger: #e8695c;
+    --good: #5cc08d;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 8px 24px -10px rgba(0, 0, 0, 0.55);
+    --shadow-lg: 0 28px 70px -24px rgba(0, 0, 0, 0.7);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#app {
+  min-height: 100%;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.1;
+}
+
+button {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font-family: var(--font-body);
+  font-size: 1rem;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent-tint);
+}
+
+a {
+  color: var(--accent-ink);
+}
+
+/* Focus: visible, warm, consistent. */
+:focus-visible {
+  outline: 2.5px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --- shared controls ---------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.6rem 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.06s ease,
+    color 0.15s ease;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-soft);
+  border-color: var(--line-strong);
+}
+.btn-ghost:hover {
+  background: var(--sheet-2);
+  color: var(--ink);
+}
+.btn-quiet {
+  background: transparent;
+  color: var(--ink-soft);
+}
+.btn-quiet:hover {
+  color: var(--ink);
+  background: var(--sheet-2);
+}
+
+.field {
+  display: block;
+}
+.field > span {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+.input {
+  width: 100%;
+  background: var(--sheet-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--sheet);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
