@@ -23,12 +23,28 @@ import base64
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import secrets
 import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
+
+# Content types the stdlib guesser gets wrong or doesn't know (fonts, ES modules).
+_STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".ico": "image/x-icon",
+    ".webmanifest": "application/manifest+json",
+    ".map": "application/json",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -221,6 +237,7 @@ class Handler(BaseHTTPRequestHandler):
     # Wired up in main().
     store = None
     admin_token = None
+    web_dir = None  # absolute path to the built web client, or None
 
     def log_message(self, fmt, *args):
         # Quiet by default; uncomment for debugging.
@@ -250,6 +267,48 @@ class Handler(BaseHTTPRequestHandler):
     def _b64(value):
         return base64.b64decode(value)
 
+    # --- static web client ------------------------------------------------
+    def _resolve_static(self, url_path):
+        """Map a URL path to a real file under web_dir, or None if it escapes.
+        Traversal segments are dropped outright, then a realpath prefix check
+        backstops it."""
+        rel = unquote(url_path)
+        if rel in ("", "/"):
+            rel = "/index.html"
+        parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
+        full = os.path.realpath(os.path.join(self.web_dir, *parts))
+        root = self.web_dir
+        if full != root and not full.startswith(root + os.sep):
+            return None
+        return full
+
+    def _serve_static(self, url_path):
+        if not self.web_dir:
+            return self._send(404, {"error": "not found"})
+        full = self._resolve_static(url_path)
+        # Single-page app: unknown paths fall back to index.html.
+        if full is None or not os.path.isfile(full):
+            full = os.path.join(self.web_dir, "index.html")
+        if not os.path.isfile(full):
+            return self._send(404, {"error": "not found"})
+
+        with open(full, "rb") as f:
+            body = f.read()
+        ext = os.path.splitext(full)[1].lower()
+        ctype = _STATIC_TYPES.get(ext) or mimetypes.guess_type(full)[0] or "application/octet-stream"
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        # Vite emits content-hashed files under assets/ — safe to cache forever.
+        rel = os.path.relpath(full, self.web_dir)
+        if rel.startswith("assets" + os.sep):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
     # --- routing ----------------------------------------------------------
     def do_GET(self):
         url = urlparse(self.path)
@@ -262,9 +321,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._changes(parse_qs(url.query))
             if url.path == "/healthz":
                 return self._send(200, {"ok": True})
+            if url.path.startswith("/v1/"):
+                # Unknown API route — keep it JSON, never fall through to the app.
+                return self._send(404, {"error": "not found"})
+            return self._serve_static(url.path)
         except Exception as exc:  # noqa: BLE001 - surface as 500 JSON
             return self._send(500, {"error": str(exc)})
-        self._send(404, {"error": "not found"})
 
     def do_POST(self):
         url = urlparse(self.path)
@@ -352,9 +414,20 @@ def main():
         default=os.environ.get("SECRETNOTES_ADMIN_TOKEN"),
         help="required to register new accounts (or set SECRETNOTES_ADMIN_TOKEN)",
     )
+    parser.add_argument(
+        "--web-dir",
+        default=os.environ.get("SECRETNOTES_WEB_DIR"),
+        help="serve the built web client (e.g. web/dist) at / alongside the API",
+    )
     args = parser.parse_args()
     if not args.admin_token:
         parser.error("--admin-token (or SECRETNOTES_ADMIN_TOKEN) is required")
+
+    if args.web_dir:
+        web_dir = os.path.realpath(args.web_dir)
+        if not os.path.isfile(os.path.join(web_dir, "index.html")):
+            parser.error(f"--web-dir {web_dir!r} has no index.html (did you run `npm run build`?)")
+        Handler.web_dir = web_dir
 
     Handler.store = Store(args.db)
     Handler.admin_token = args.admin_token
@@ -362,6 +435,8 @@ def main():
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"SecretNotes sync server listening on http://{args.host}:{args.port}")
     print("Endpoints: /v1/{register,prelogin,login,keys,changes,push}")
+    if Handler.web_dir:
+        print(f"Serving web client from {Handler.web_dir}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

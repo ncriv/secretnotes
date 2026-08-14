@@ -21,6 +21,20 @@ python3 secretnotes_server.py \
 account registration, so the server isn't an open sign-up endpoint. Hand this
 token to the app once, when connecting the first device.
 
+### Serving the web client
+
+Pass `--web-dir` (or `SECRETNOTES_WEB_DIR`) to serve the built browser app from
+the same origin as the API — no CORS, no separate host:
+
+```sh
+python3 secretnotes_server.py --db notes.db --admin-token "$TOKEN" --web-dir ../web/dist
+```
+
+Build it first with `npm run build` in `../web`. The server returns `index.html`
+at `/`, serves hashed assets under `/assets/` with a long immutable cache, keeps
+`/v1/*` and `/healthz` as JSON, and falls back to `index.html` for any other
+path. Path traversal outside `--web-dir` is refused.
+
 ### TLS
 
 Payloads are E2E-encrypted, but **put the server behind TLS anyway** — it still
